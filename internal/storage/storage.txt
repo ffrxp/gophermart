@@ -1,0 +1,37 @@
+/* CREATE TABLE IF NOT EXISTS public.users
+(
+    uuid uuid NOT NULL,
+    login character varying(255) NOT NULL,
+    password character varying(512) NOT NULL,
+    PRIMARY KEY (uuid)
+);
+
+CREATE TABLE IF NOT EXISTS public.accounts
+(
+    user_uuid uuid NOT NULL,
+    points_number integer NOT NULL DEFAULT 0,
+    withdrawn integer NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_uuid)
+)
+
+CREATE TABLE IF NOT EXISTS public.withdrawals
+(
+    uuid uuid NOT NULL,
+    user_uuid uuid NOT NULL,
+    order_uuid uuid NOT NULL,
+    sum integer NOT NULL,
+    processed_at date NOT NULL,
+    PRIMARY KEY (uuid)
+);
+
+CREATE TABLE IF NOT EXISTS public.orders
+(
+    id integer NOT NULL,
+    status character varying(255) NOT NULL,
+    accrual integer NOT NULL DEFAULT 0,
+    uploaded_at date NOT NULL,
+    PRIMARY KEY (id)
+);
+
+*/
+
