@@ -283,7 +283,7 @@ func (router *Router) loadOrderNumber() http.HandlerFunc {
 		ct := r.Header.Get("content-type")
 		if ct != "text/plain" {
 			log.Error().Err(err).Msgf("Request of load order number failed: invalid content type of request")
-			http.Error(w, "Invalid content type of request", http.StatusBadRequest)
+			http.Error(w, "Invalid content type of request", http.StatusUnprocessableEntity)
 			return
 		}
 		orderID := string(body)
