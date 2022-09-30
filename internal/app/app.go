@@ -162,7 +162,7 @@ func (gapp *GophermartApp) DoWithdraw(login string, orderID string, sum int) err
 		return err
 	}
 	withdrawalTime := time.Now()
-	newWithdrawal := storage.Withdrawal{OrderId: orderID, Amount: sum, ProcessedAt: withdrawalTime}
+	newWithdrawal := storage.Withdrawal{OrderID: orderID, Amount: sum, ProcessedAt: withdrawalTime}
 	err = gapp.Storage.AddWithdrawal(login, newWithdrawal)
 	if err != nil {
 		return err

@@ -147,8 +147,8 @@ func (router *Router) middlewareAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if !isTokenValid {
-			log.Info().Err(err).Msgf("Authentication failed. Invalid token")
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			log.Info().Msgf("Authentication failed. Invalid token")
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
@@ -158,7 +158,6 @@ func (router *Router) middlewareAuth(next http.HandlerFunc) http.HandlerFunc {
 func (router *Router) badRequest() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		return
 	}
 }
 
@@ -208,7 +207,6 @@ func (router *Router) registerUser() http.HandlerFunc {
 		http.SetCookie(w, cookie)
 		log.Info().Msgf("User with login %s registered", requestParsedBody.Login)
 		w.WriteHeader(http.StatusOK)
-		return
 	}
 }
 
@@ -261,7 +259,6 @@ func (router *Router) loginUser() http.HandlerFunc {
 		http.SetCookie(w, cookie)
 		log.Info().Msgf("User with login %s authenticated", requestParsedBody.Login)
 		w.WriteHeader(http.StatusOK)
-		return
 	}
 }
 
@@ -322,7 +319,6 @@ func (router *Router) loadOrderNumber() http.HandlerFunc {
 			router.processOrdersChan <- OrderProcessorData{orderID, userLogin}
 		}()
 		log.Info().Msgf("Load order for user %s with ID %s: order process started", userLogin, orderID)
-		return
 	}
 }
 
@@ -430,11 +426,6 @@ func (router *Router) doWithdraw() http.HandlerFunc {
 		}
 
 		userLogin := string(cookieData.Login)
-		if err != nil {
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			log.Info().Msgf("Doing withdraw for user %s: wrong order ID", userLogin)
-			return
-		}
 		err = router.app.DoWithdraw(userLogin, withdrawReqData.OrderID, withdrawReqData.Sum)
 		if err != nil {
 			if errors.Is(err, app.ErrWrongOrderID) {
@@ -452,7 +443,6 @@ func (router *Router) doWithdraw() http.HandlerFunc {
 		}
 		log.Info().Msgf("Doing withdraw for user %s complete successfully", userLogin)
 		w.WriteHeader(http.StatusOK)
-		return
 	}
 }
 

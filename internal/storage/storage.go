@@ -32,7 +32,7 @@ type databaseStorage struct {
 }
 
 type Withdrawal struct {
-	OrderId     string    `json:"order"`
+	OrderID     string    `json:"order"`
 	Amount      int       `json:"sum"`
 	ProcessedAt time.Time `json:"processed_at"`
 }
@@ -270,7 +270,7 @@ func (dbs *databaseStorage) GetUserWithdrawals(login string) ([]Withdrawal, erro
 	var withdrawals []Withdrawal
 	for rows.Next() {
 		var withdrawal Withdrawal
-		err = rows.Scan(&withdrawal.OrderId, &withdrawal.Amount, &withdrawal.ProcessedAt)
+		err = rows.Scan(&withdrawal.OrderID, &withdrawal.Amount, &withdrawal.ProcessedAt)
 		if err != nil {
 			log.Info().Err(err).Msgf("Storage. Error while scan select results of withdrawals for login '%s'", login)
 			return nil, err
@@ -398,7 +398,7 @@ func (dbs *databaseStorage) GetOrderByID(orderID string) (Order, error) {
 
 func (dbs *databaseStorage) AddWithdrawal(login string, withdrawal Withdrawal) error {
 	log.Info().Msgf("Storage: add withdrawal. Login:'%s'. Withdrawal data: order ID:%s|sum:%d",
-		login, withdrawal.OrderId, withdrawal.Amount)
+		login, withdrawal.OrderID, withdrawal.Amount)
 
 	userUUID, err := dbs.GetUserUUID(login)
 	if err != nil {
@@ -408,9 +408,9 @@ func (dbs *databaseStorage) AddWithdrawal(login string, withdrawal Withdrawal) e
 	defer cancelFunc()
 	if _, err := dbs.pool.Exec(ctx,
 		"INSERT INTO withdrawals (uuid, user_uuid, order_id, amount, processed_at) VALUES (gen_random_uuid(), $1, $2, $3, $4)",
-		userUUID, withdrawal.OrderId, withdrawal.Amount, withdrawal.ProcessedAt); err != nil {
+		userUUID, withdrawal.OrderID, withdrawal.Amount, withdrawal.ProcessedAt); err != nil {
 		log.Error().Err(err).Msgf("SQL insert user error. Login:'%s'. Withdrawal data: order ID:%s|sum:%d",
-			login, withdrawal.OrderId, withdrawal.Amount)
+			login, withdrawal.OrderID, withdrawal.Amount)
 		return err
 	}
 	return nil
