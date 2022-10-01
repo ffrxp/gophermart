@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ffrxp/gophermart/internal/currency"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/rs/zerolog/log"
@@ -15,15 +16,15 @@ type Repository interface {
 	AddUser(login string, pwdHash []byte) error
 	GetPwdHashForLogin(login string) ([]byte, error)
 	GetUserUUID(login string) (string, error)
-	GetUserTotalWithdrawal(userLogin string) (int, error)
-	GetUserBalance(login string) (int, error)
+	GetUserTotalWithdrawal(userLogin string) (*currency.Currency, error)
+	GetUserBalance(login string) (*currency.Currency, error)
 	GetUserWithdrawals(login string) ([]Withdrawal, error)
 	GetUserOrders(login string) ([]Order, error)
 	IsExistUserOrderWithID(login string, orderID string) (bool, error)
 	GetOrderByID(orderID string) (Order, error)
 	AddOrder(order Order) error
-	UpdateOrder(orderID string, status string, accrual int) error
-	SetUserBalance(login string, balance int) error
+	UpdateOrder(orderID string, status string, accrual *currency.Currency) error
+	SetUserBalance(login string, balance *currency.Currency) error
 	AddWithdrawal(login string, withdrawal Withdrawal) error
 }
 
@@ -32,21 +33,33 @@ type databaseStorage struct {
 }
 
 type Withdrawal struct {
-	OrderID     string    `json:"order"`
-	Amount      int       `json:"sum"`
-	ProcessedAt time.Time `json:"processed_at"`
+	OrderID     string
+	Amount      *currency.Currency
+	ProcessedAt time.Time
+}
+
+func (withdrawal Withdrawal) MarshalJSON() ([]byte, error) {
+	type WithdrawalWithInt struct {
+		OrderID     string    `json:"order"`
+		Amount      float32   `json:"sum"`
+		ProcessedAt time.Time `json:"processed_at"`
+	}
+	withdrawalWithInt := &WithdrawalWithInt{
+		withdrawal.OrderID,
+		withdrawal.Amount.ToFloat(),
+		withdrawal.ProcessedAt}
+	return json.Marshal(withdrawalWithInt)
 }
 
 type Order struct {
-	ID         string    `json:"number"`
-	UserID     string    `json:"-"`
-	Status     string    `json:"status"`
-	Accrual    int       `json:"accrual"`
-	UploadedAt time.Time `json:"uploaded_at"`
+	ID         string
+	UserID     string
+	Status     string
+	Accrual    *currency.Currency
+	UploadedAt time.Time
 }
 
 func (order Order) MarshalJSON() ([]byte, error) {
-	type OrderNoAccrual Order
 	orderNoAccrual := struct {
 		ID         string    `json:"number"`
 		UserID     string    `json:"-"`
@@ -55,15 +68,20 @@ func (order Order) MarshalJSON() ([]byte, error) {
 	}{
 		ID: order.ID, UserID: order.UserID, Status: order.Status, UploadedAt: order.UploadedAt,
 	}
-	type OrderAlias Order
-	orderCopy := struct {
-		OrderAlias
-	}{OrderAlias: OrderAlias(order)}
-
-	if order.Accrual == 0 {
+	if order.Accrual.IsZero() {
 		return json.Marshal(orderNoAccrual)
 	}
-	return json.Marshal(orderCopy)
+
+	orderFloatAccrual := struct {
+		ID         string    `json:"number"`
+		UserID     string    `json:"-"`
+		Status     string    `json:"status"`
+		Accrual    float32   `json:"accrual"`
+		UploadedAt time.Time `json:"uploaded_at"`
+	}{
+		ID: order.ID, UserID: order.UserID, Status: order.Status, Accrual: order.Accrual.ToFloat(), UploadedAt: order.UploadedAt,
+	}
+	return json.Marshal(orderFloatAccrual)
 }
 
 var ErrUserExist = errors.New("storage: user already exists")
@@ -193,53 +211,53 @@ func (dbs *databaseStorage) GetUserUUID(login string) (string, error) {
 	return userUUID, nil
 }
 
-func (dbs *databaseStorage) GetUserTotalWithdrawal(userLogin string) (int, error) {
+func (dbs *databaseStorage) GetUserTotalWithdrawal(userLogin string) (*currency.Currency, error) {
 	log.Info().Msgf("Storage: get total withdrawal for user '%s'", userLogin)
 
 	userUUID, err := dbs.GetUserUUID(userLogin)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancelFunc()
-	var totalSum int
-	err = dbs.pool.QueryRow(ctx, "SELECT COALESCE(SUM(amount), 0) FROM withdrawals WHERE user_uuid = $1", userUUID).Scan(&totalSum)
+	totalWithdrawal, _ := currency.NewCurrency(0, 0)
+	err = dbs.pool.QueryRow(ctx, "SELECT COALESCE(SUM(amount), 0) FROM withdrawals WHERE user_uuid = $1", userUUID).Scan(totalWithdrawal)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			log.Info().Err(err).Msgf("Storage. Empty result for select total withdrawals for user '%s'", userLogin)
-			return 0, ErrEmptyResult
+			return nil, ErrEmptyResult
 		}
 		log.Error().Err(err).Msgf("Storage getting withdrawals for user error. Login: %s", userLogin)
-		return 0, err
+		return nil, err
 	}
-	return totalSum, nil
+	return totalWithdrawal, nil
 }
 
-func (dbs *databaseStorage) GetUserBalance(login string) (int, error) {
+func (dbs *databaseStorage) GetUserBalance(login string) (*currency.Currency, error) {
 	log.Info().Msgf("Storage: get user balance for login. Login:'%s'", login)
-	var balance int
+	balance, _ := currency.NewCurrency(0, 0)
 
 	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancelFunc()
-	err := dbs.pool.QueryRow(ctx, "SELECT balance FROM users WHERE login = $1", login).Scan(&balance)
+	err := dbs.pool.QueryRow(ctx, "SELECT balance FROM users WHERE login = $1", login).Scan(balance)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			log.Info().Err(err).Msgf("Storage. Empty result for select balance login '%s'", login)
-			return 0, ErrEmptyResult
+			return nil, ErrEmptyResult
 		}
 		log.Error().Err(err).Msgf("Storage getting balance for login error. Login: %s", login)
-		return 0, err
+		return nil, err
 	}
 	return balance, nil
 }
 
-func (dbs *databaseStorage) SetUserBalance(login string, balance int) error {
+func (dbs *databaseStorage) SetUserBalance(login string, balance *currency.Currency) error {
 	log.Info().Msgf("Storage: set user balance. Login:%s. Balance:%d", login, balance)
 
 	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancelFunc()
 	if _, err := dbs.pool.Exec(ctx,
-		"UPDATE users SET balance = $1 WHERE login = $2", balance, login); err != nil {
+		"UPDATE users SET balance = $1 WHERE login = $2", *balance, login); err != nil {
 		log.Info().Err(err).Msgf("Storage. Update query error. Login:%s. Balance:%d", login, balance)
 		return err
 	}
@@ -355,14 +373,14 @@ func (dbs *databaseStorage) AddOrder(order Order) error {
 
 	if _, err := dbs.pool.Exec(ctx,
 		"INSERT INTO orders (id,user_uuid,status,accrual,uploaded_at) VALUES ($1, $2, $3, $4, $5)",
-		order.ID, order.UserID, order.Status, order.Accrual, order.UploadedAt); err != nil {
+		order.ID, order.UserID, order.Status, *order.Accrual, order.UploadedAt); err != nil {
 		log.Error().Err(err).Msgf("SQL insert order error. Order ID:%s", order.ID)
 		return err
 	}
 	return nil
 }
 
-func (dbs *databaseStorage) UpdateOrder(orderID string, status string, accrual int) error {
+func (dbs *databaseStorage) UpdateOrder(orderID string, status string, accrual *currency.Currency) error {
 	log.Info().Msgf("Storage: update order. Order ID:%s", orderID)
 
 	ctx, cancelFunc := context.WithTimeout(context.Background(), time.Second*2)
@@ -370,7 +388,7 @@ func (dbs *databaseStorage) UpdateOrder(orderID string, status string, accrual i
 
 	if _, err := dbs.pool.Exec(ctx,
 		"UPDATE orders SET status = $1, accrual = $2 WHERE id = $3",
-		status, accrual, orderID); err != nil {
+		status, *accrual, orderID); err != nil {
 		log.Error().Err(err).Msgf("SQL update order error. Order ID:%s", orderID)
 		return err
 	}
@@ -408,7 +426,7 @@ func (dbs *databaseStorage) AddWithdrawal(login string, withdrawal Withdrawal) e
 	defer cancelFunc()
 	if _, err := dbs.pool.Exec(ctx,
 		"INSERT INTO withdrawals (uuid, user_uuid, order_id, amount, processed_at) VALUES (gen_random_uuid(), $1, $2, $3, $4)",
-		userUUID, withdrawal.OrderID, withdrawal.Amount, withdrawal.ProcessedAt); err != nil {
+		userUUID, withdrawal.OrderID, *withdrawal.Amount, withdrawal.ProcessedAt); err != nil {
 		log.Error().Err(err).Msgf("SQL insert user error. Login:'%s'. Withdrawal data: order ID:%s|sum:%d",
 			login, withdrawal.OrderID, withdrawal.Amount)
 		return err

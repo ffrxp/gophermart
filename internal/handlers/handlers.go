@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/ffrxp/gophermart/internal/app"
 	"github.com/ffrxp/gophermart/internal/common"
+	"github.com/ffrxp/gophermart/internal/currency"
 	"github.com/ffrxp/gophermart/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt"
@@ -38,6 +39,54 @@ var ErrAccrualSystemReqEsceeded = errors.New("accrual system: exceeded the numbe
 type OrderProcessorData struct {
 	orderID   string
 	userLogin string
+}
+
+type AccrualRespData struct {
+	OrderID string
+	Status  string
+	Accrual *currency.Currency
+}
+
+func (ard *AccrualRespData) UnmarshalJSON(data []byte) error {
+	AccrualRespDataWithFloat := struct {
+		OrderID string  `json:"order"`
+		Status  string  `json:"status"`
+		Accrual float32 `json:"accrual"`
+	}{OrderID: "", Status: "", Accrual: 0.0}
+
+	if err := json.Unmarshal(data, &AccrualRespDataWithFloat); err != nil {
+		return err
+	}
+	ard.Status = AccrualRespDataWithFloat.Status
+	ard.OrderID = AccrualRespDataWithFloat.OrderID
+
+	accrualInKopecks := int(AccrualRespDataWithFloat.Accrual * 100)
+	accrual, _ := currency.NewCurrency(accrualInKopecks/100, accrualInKopecks%100)
+
+	ard.Accrual = accrual
+	return nil
+}
+
+type WithdrawReqData struct {
+	OrderID string             `json:"order"`
+	Sum     *currency.Currency `json:"sum"`
+}
+
+func (wrd *WithdrawReqData) UnmarshalJSON(data []byte) error {
+	WithdrawReqDataWithFloat := struct {
+		OrderID string  `json:"order"`
+		Sum     float32 `json:"sum"`
+	}{OrderID: "", Sum: 0.0}
+
+	if err := json.Unmarshal(data, &WithdrawReqDataWithFloat); err != nil {
+		return err
+	}
+	wrd.OrderID = WithdrawReqDataWithFloat.OrderID
+
+	sumInKopecks := int(WithdrawReqDataWithFloat.Sum * 100)
+	sum, _ := currency.NewCurrency(sumInKopecks/100, sumInKopecks%100)
+	wrd.Sum = sum
+	return nil
 }
 
 func NewRouter(ga *app.GophermartApp) Router {
@@ -414,10 +463,7 @@ func (router *Router) doWithdraw() http.HandlerFunc {
 			http.Error(w, "Invalid content type of request", http.StatusBadRequest)
 			return
 		}
-		withdrawReqData := struct {
-			OrderID string `json:"order"`
-			Sum     int    `json:"sum"`
-		}{OrderID: "", Sum: 0}
+		withdrawReqData := WithdrawReqData{OrderID: "", Sum: nil}
 
 		if err := json.Unmarshal(body, &withdrawReqData); err != nil {
 			log.Error().Err(err).Msgf("Request of doing withdraw failed. Cannot unmarshal JSON request")
@@ -576,11 +622,7 @@ func (router *Router) orderProcessor(orderID string, userLogin string) {
 			}
 			return
 		}
-		AccrualRespData := struct {
-			OrderID string `json:"order"`
-			Status  string `json:"status"`
-			Accrual int    `json:"accrual"`
-		}{OrderID: "", Status: "", Accrual: 0}
+		AccrualRespData := AccrualRespData{OrderID: "", Status: "", Accrual: nil}
 
 		if err := json.Unmarshal(resp, &AccrualRespData); err != nil {
 			log.Error().Err(err).Msgf("Request to accrual system failed. Cannot unmarshal JSON response")

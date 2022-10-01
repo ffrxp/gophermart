@@ -2,8 +2,10 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"github.com/ffrxp/gophermart/internal/common"
+	"github.com/ffrxp/gophermart/internal/currency"
 	"github.com/ffrxp/gophermart/internal/storage"
 	"github.com/rs/zerolog/log"
 	"time"
@@ -18,8 +20,17 @@ type GophermartApp struct {
 }
 
 type BalanceData struct {
-	Balance   int `json:"current"`
-	Withdrawn int `json:"withdrawn"`
+	Balance   *currency.Currency
+	Withdrawn *currency.Currency
+}
+
+func (bd BalanceData) MarshalJSON() ([]byte, error) {
+	type BalanceDataWithFloat struct {
+		Balance   float32 `json:"current"`
+		Withdrawn float32 `json:"withdrawn"`
+	}
+	balanceDataWithInt := &BalanceDataWithFloat{bd.Balance.ToFloat(), bd.Withdrawn.ToFloat()}
+	return json.Marshal(balanceDataWithInt)
 }
 
 var ErrWrongOrderID = errors.New("app: wrong order ID")
@@ -62,7 +73,12 @@ func (gapp *GophermartApp) LoadOrder(login string, orderID string) error {
 	order, err := gapp.Storage.GetOrderByID(orderID)
 	if err != nil {
 		if errors.Is(err, storage.ErrEmptyResult) {
-			order := storage.Order{ID: orderID, UserID: userUUID, Status: "NEW", Accrual: 0, UploadedAt: time.Now()}
+			accrual, _ := currency.NewCurrency(0, 0)
+			order := storage.Order{ID: orderID,
+				UserID:     userUUID,
+				Status:     "NEW",
+				Accrual:    accrual,
+				UploadedAt: time.Now()}
 			err = gapp.Storage.AddOrder(order)
 			if err != nil {
 				return err
@@ -79,7 +95,7 @@ func (gapp *GophermartApp) LoadOrder(login string, orderID string) error {
 	}
 }
 
-func (gapp *GophermartApp) ApplyAccrualSystemData(orderID string, status string, accrual int, userLogin string) error {
+func (gapp *GophermartApp) ApplyAccrualSystemData(orderID string, status string, accrual *currency.Currency, userLogin string) error {
 	log.Info().Msgf("App: apply accrual system data. Order ID:%s, status:%s, accrual:%d", orderID, status, accrual)
 	if status == "REGISTERED" {
 		return nil
@@ -93,8 +109,8 @@ func (gapp *GophermartApp) ApplyAccrualSystemData(orderID string, status string,
 		if err != nil {
 			return err
 		}
-		newBalance := balance + accrual
-		err = gapp.Storage.SetUserBalance(userLogin, newBalance)
+		balance.Add(accrual)
+		err = gapp.Storage.SetUserBalance(userLogin, balance)
 		if err != nil {
 			return err
 		}
@@ -118,11 +134,12 @@ func (gapp *GophermartApp) GetUserBalance(login string) (BalanceData, error) {
 	log.Info().Msgf("App: Get balance for user with login %s", login)
 	balance, err := gapp.Storage.GetUserBalance(login)
 	if err != nil {
-		return BalanceData{}, err
+
+		return BalanceData{nil, nil}, err
 	}
 	withdrawn, err := gapp.Storage.GetUserTotalWithdrawal(login)
 	if err != nil {
-		return BalanceData{}, err
+		return BalanceData{nil, nil}, err
 	}
 	return BalanceData{balance, withdrawn}, nil
 }
@@ -139,7 +156,7 @@ func (gapp *GophermartApp) GetUserWithdrawals(login string) ([]storage.Withdrawa
 	return withdrawals, nil
 }
 
-func (gapp *GophermartApp) DoWithdraw(login string, orderID string, sum int) error {
+func (gapp *GophermartApp) DoWithdraw(login string, orderID string, sum *currency.Currency) error {
 	log.Info().Msgf("App: Doing withdraw for user with login %s. Order ID: %s. Sum: %d", login, orderID, sum)
 
 	orderExist, err := gapp.Storage.IsExistUserOrderWithID(login, orderID)
@@ -153,11 +170,11 @@ func (gapp *GophermartApp) DoWithdraw(login string, orderID string, sum int) err
 	if err != nil {
 		return err
 	}
-	newBalance := balance - sum
-	if newBalance < 0 {
+	err = balance.Subtract(sum)
+	if errors.Is(err, currency.ErrNegativeValue) {
 		return ErrBalanceTooLow
 	}
-	err = gapp.Storage.SetUserBalance(login, newBalance)
+	err = gapp.Storage.SetUserBalance(login, balance)
 	if err != nil {
 		return err
 	}
