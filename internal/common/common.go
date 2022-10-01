@@ -48,7 +48,6 @@ func GenHashForRawPassword(pwd, salt string) []byte {
 	return res
 }
 
-// Реализация алгоритма Луна из Википедии. Если будет время - реализую самостоятельно
 func IsValidByLuhnAlg(number int64) bool {
 	return (number%10+checksum(number/10))%10 == 0
 }
