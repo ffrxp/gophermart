@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ffrxp/gophermart/internal/app"
-	"github.com/ffrxp/gophermart/internal/common"
 	"github.com/ffrxp/gophermart/internal/currency"
 	"github.com/ffrxp/gophermart/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -16,7 +15,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -35,6 +33,7 @@ type Router struct {
 var ErrInvalidTokenFormat = errors.New("token has invalid format")
 var ErrAccrualSystemServerErr = errors.New("accrual system server error")
 var ErrAccrualSystemReqEsceeded = errors.New("accrual system: exceeded the number of requests")
+var ErrAccrualSystemRespNoContent = errors.New("accrual system: no content in response")
 
 type OrderProcessorData struct {
 	orderID   string
@@ -336,19 +335,13 @@ func (router *Router) loadOrderNumber() http.HandlerFunc {
 			return
 		}
 		orderID := string(body)
-		digitOrderID, err := strconv.ParseInt(orderID, 10, 0)
-		if err != nil {
-			log.Error().Err(err).Msgf("Request of load order number failed: invalid content type of request")
-			http.Error(w, "Invalid content type of request", http.StatusUnprocessableEntity)
-			return
-		}
-		if !common.IsValidByLuhnAlg(digitOrderID) {
-			log.Error().Err(err).Msgf("Request of load order number failed: invalid order ID format. ID: '%s'", orderID)
-			http.Error(w, "Invalid order ID format", http.StatusUnprocessableEntity)
-			return
-		}
 		err = router.app.LoadOrder(userLogin, orderID)
 		if err != nil {
+			if errors.Is(err, app.ErrOrderIDIIncorrect) {
+				log.Error().Err(err).Msgf("Request of load order number failed: invalid content type of request")
+				http.Error(w, "Invalid content type of request", http.StatusUnprocessableEntity)
+				return
+			}
 			if errors.Is(err, app.ErrOrderWasLoaded) {
 				w.WriteHeader(http.StatusOK)
 				log.Info().Msgf("Load order for user %s with ID %s: order has been already loaded", userLogin, orderID)
@@ -470,8 +463,28 @@ func (router *Router) doWithdraw() http.HandlerFunc {
 			http.Error(w, "Cannot unmarshal JSON request", http.StatusBadRequest)
 			return
 		}
-
 		userLogin := string(cookieData.Login)
+		err = router.app.LoadOrder(userLogin, withdrawReqData.OrderID)
+		if err != nil {
+			if errors.Is(err, app.ErrOrderIDIIncorrect) {
+				log.Error().Err(err).Msgf("Request of load order number failed: invalid content type of request")
+				http.Error(w, "Invalid content type of request", http.StatusUnprocessableEntity)
+				return
+			}
+			if errors.Is(err, app.ErrAnotherUserOrder) {
+				w.WriteHeader(http.StatusConflict)
+				log.Info().Msgf("Load order for user %s with ID %s: order was made by another user", userLogin, withdrawReqData.OrderID)
+				return
+			}
+			log.Error().Err(err).Msgf("Request of load order number failed")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		go func() {
+			router.processOrdersChan <- OrderProcessorData{withdrawReqData.OrderID, userLogin}
+		}()
+		log.Info().Msgf("Load order for user %s with ID %s: order process started", userLogin, withdrawReqData.OrderID)
+
 		err = router.app.DoWithdraw(userLogin, withdrawReqData.OrderID, withdrawReqData.Sum)
 		if err != nil {
 			if errors.Is(err, app.ErrWrongOrderID) {
@@ -610,6 +623,7 @@ func (router *Router) ordersProcessor() {
 
 func (router *Router) orderProcessor(orderID string, userLogin string) {
 	log.Info().Msgf("Order processor: start goroutine. Order ID:%s", orderID)
+	defer atomic.AddInt32(&router.processingOrdersNum, -1)
 	for {
 		resp, err := router.requestToAccrualSystem(orderID)
 		if err != nil {
@@ -620,10 +634,18 @@ func (router *Router) orderProcessor(orderID string, userLogin string) {
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
+			if errors.Is(err, ErrAccrualSystemRespNoContent) {
+				zeroCurrency, _ := currency.NewCurrency(0, 0)
+				err = router.app.ApplyAccrualSystemData(orderID,
+					"INVALID",
+					zeroCurrency,
+					userLogin)
+				log.Info().Msgf("Order processor: processing complete. Order ID:%s", orderID)
+				return
+			}
 			return
 		}
 		AccrualRespData := AccrualRespData{OrderID: "", Status: "", Accrual: nil}
-
 		if err := json.Unmarshal(resp, &AccrualRespData); err != nil {
 			log.Error().Err(err).Msgf("Request to accrual system failed. Cannot unmarshal JSON response")
 			return
@@ -636,7 +658,7 @@ func (router *Router) orderProcessor(orderID string, userLogin string) {
 			return
 		}
 		if AccrualRespData.Status == "INVALID" || AccrualRespData.Status == "PROCESSED" {
-			atomic.AddInt32(&router.processingOrdersNum, -1)
+			//atomic.AddInt32(&router.processingOrdersNum, -1)
 			log.Info().Msgf("Order processor: processing complete. Order ID:%s", orderID)
 			return
 		}
@@ -665,6 +687,9 @@ func (router *Router) requestToAccrualSystem(orderID string) ([]byte, error) {
 	} else if resp.StatusCode == http.StatusTooManyRequests {
 		log.Info().Msgf("Request to accrual system: too many requests. Order ID:%s", orderID)
 		return nil, ErrAccrualSystemReqEsceeded
+	} else if resp.StatusCode == http.StatusNoContent {
+		log.Info().Msgf("Request to accrual system: no content in response. Order ID:%s", orderID)
+		return nil, ErrAccrualSystemRespNoContent
 	}
 	respBody, err := io.ReadAll(resp.Body)
 	defer resp.Body.Close()

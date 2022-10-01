@@ -8,6 +8,7 @@ import (
 	"github.com/ffrxp/gophermart/internal/currency"
 	"github.com/ffrxp/gophermart/internal/storage"
 	"github.com/rs/zerolog/log"
+	"strconv"
 	"time"
 )
 
@@ -37,6 +38,7 @@ var ErrWrongOrderID = errors.New("app: wrong order ID")
 var ErrBalanceTooLow = errors.New("app: balance too low")
 var ErrAnotherUserOrder = errors.New("app: order was made by another user")
 var ErrOrderWasLoaded = errors.New("app: order has been already loaded")
+var ErrOrderIDIIncorrect = errors.New("app: order ID doesn't pass integrity checking")
 
 func (gapp *GophermartApp) RegisterUser(login, password string) error {
 	log.Info().Msgf("App: Registering user with login %s", login)
@@ -66,6 +68,16 @@ func (gapp *GophermartApp) UserCredentialsIsValid(login, password string) (bool,
 
 func (gapp *GophermartApp) LoadOrder(login string, orderID string) error {
 	log.Info().Msgf("App: load order with ID %s for user %s", orderID, login)
+
+	// Проверка на целостность по алгоритму Луна
+	digitOrderID, err := strconv.ParseInt(orderID, 10, 0)
+	if err != nil {
+		return ErrOrderIDIIncorrect
+	}
+	if !common.IsValidByLuhnAlg(digitOrderID) {
+		return ErrOrderIDIIncorrect
+	}
+
 	userUUID, err := gapp.Storage.GetUserUUID(login)
 	if err != nil {
 		return err

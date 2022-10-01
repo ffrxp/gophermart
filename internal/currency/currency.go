@@ -58,14 +58,12 @@ func (currency *Currency) IsZero() bool {
 }
 
 func (currency *Currency) ToFloat() float32 {
-	var result float32
-	result = float32(currency.Rubles) + (float32(currency.Kopecks) / 100)
+	result := float32(currency.Rubles) + (float32(currency.Kopecks) / 100)
 	return result
 }
 
 func (currency Currency) Value() (driver.Value, error) {
-	var result int64
-	result = int64((currency.Rubles * 100) + currency.Kopecks)
+	result := int64((currency.Rubles * 100) + currency.Kopecks)
 
 	return result, nil
 }
