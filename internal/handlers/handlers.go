@@ -637,10 +637,12 @@ func (router *Router) orderProcessor(orderID string, userLogin string) {
 			if errors.Is(err, ErrAccrualSystemRespNoContent) {
 				zeroCurrency, _ := currency.NewCurrency(0, 0)
 				err = router.app.ApplyAccrualSystemData(orderID,
-					"INVALID",
+					"NEW",
 					zeroCurrency,
 					userLogin)
-				log.Info().Msgf("Order processor: processing complete. Order ID:%s", orderID)
+				if err == nil {
+					log.Info().Msgf("Order processor: processing complete. Order ID:%s", orderID)
+				}
 				return
 			}
 			return
